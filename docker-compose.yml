@@ -1,9 +1,16 @@
 services:
   patri:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
     image: patri:latest
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Safe only because the published port below is loopback-only: the proxy
+      # is the sole way in and appends the real client as the rightmost hop.
+      TRUSTED_PROXY: '1'
     # loopback only: put Caddy/nginx in front for TLS, or change to "8000:8000"
     ports:
       - '127.0.0.1:8000:8000'

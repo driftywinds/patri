@@ -4,6 +4,7 @@
   import Train from './lib/Train.svelte';
   import Admin from './lib/Admin.svelte';
   import Marquee from './lib/Marquee.svelte';
+  import Followed from './lib/Followed.svelte';
   import { search } from './lib/api.js';
 
   const admin = location.pathname.replace(/\/+$/, '') === '/admin';
@@ -64,6 +65,7 @@
   <main class="wrap"><Train {no} /></main>
 {:else}
   <main class="wrap">
+    <Followed />
     {#if busy}
       <p class="state">Searching NTES…</p>
     {:else if error}

@@ -11,6 +11,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 log = logging.getLogger("patri.cache")
 
@@ -18,6 +20,7 @@ COLLECTION = "patri_cache"
 
 # d9 usually boots slower than us; keep checking until the collection answers.
 RETRY_SECONDS = 300
+PURGE_DAYS = 7
 
 FIELDS = [
     {
@@ -30,6 +33,7 @@ FIELDS = [
                     {"text": "live", "value": "live"},
                     {"text": "search", "value": "search"},
                     {"text": "setting", "value": "setting"},
+                    {"text": "miss", "value": "miss"},
                 ]
             },
             "width": "half",
@@ -40,18 +44,50 @@ FIELDS = [
     {"field": "train_no", "type": "string", "meta": {"interface": "input", "width": "half"}, "schema": {}},
     {"field": "run_date", "type": "date", "meta": {"interface": "datetime", "width": "half"}, "schema": {}},
     {"field": "payload", "type": "json", "meta": {"interface": "input-code", "options": {"language": "json"}}, "schema": {}},
+    {
+        "field": "date_created",
+        "type": "timestamp",
+        "meta": {"special": ["date-created"], "interface": "datetime", "readonly": True, "width": "half"},
+        "schema": {},
+    },
+    {
+        "field": "date_updated",
+        "type": "timestamp",
+        "meta": {"special": ["date-updated"], "interface": "datetime", "readonly": True, "width": "half"},
+        "schema": {},
+    },
 ]
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the bearer token must not travel to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _is_local(host):
+    return host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local")
 
 
 class Cache:
     def __init__(self, base_url: str, token: str, ttl: int):
-        self.base = base_url.rstrip("/")
+        base = base_url.rstrip("/")
+        parsed = urllib.parse.urlsplit(base)
+        if parsed.scheme == "https":
+            pass
+        elif parsed.scheme == "http" and _is_local(parsed.hostname or ""):
+            pass
+        else:
+            raise ValueError("DIRECTUS_URL must be https (http is only allowed for localhost)")
+        self.base = base
         self.endpoint = f"{self.base}/items/{COLLECTION}"
         self.token = token
         self.ttl = ttl
         self.ready = False
         self._next_check = 0.0
         self._lock = threading.Lock()
+        self._opener = urllib.request.build_opener(_NoRedirect)
 
     # -- plumbing -------------------------------------------------------
 
@@ -71,7 +107,7 @@ class Cache:
             self.base + path, data=data, method=method, headers=self._headers()
         )
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with self._opener.open(req, timeout=15) as r:
                 return r.status, r.read().decode("utf-8") or "{}"
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode("utf-8", "replace")
@@ -87,9 +123,10 @@ class Cache:
     # -- schema ---------------------------------------------------------
 
     def ensure_schema(self):
-        """Create the collection and its fields if d9 does not have them yet."""
-        status, _ = self._raw("GET", f"/collections/{COLLECTION}")
+        """Make sure the collection and every field this version needs exist."""
+        status, _ = self._raw("GET", f"/items/{COLLECTION}?limit=1")
         if status == 200:
+            self._repair_fields()
             return True
         if status not in (403, 404):
             log.warning("could not check %s (status %s)", COLLECTION, status)
@@ -107,7 +144,7 @@ class Cache:
         )
         if status != 200:
             if "already exists" in text.lower():
-                log.warning("%s exists but the token cannot read its schema", COLLECTION)
+                log.warning("%s exists but the token cannot read it", COLLECTION)
             else:
                 log.warning(
                     "could not create %s (%s): %s - create it manually or use a token "
@@ -125,6 +162,27 @@ class Cache:
                 return False
         log.info("created collection at d9 server %s", self.base)
         return True
+
+    def _repair_fields(self):
+        """Add fields an older collection is missing; a read-only token is left alone."""
+        status, text = self._raw("GET", f"/fields/{COLLECTION}")
+        if status != 200:
+            return
+        try:
+            present = {f["field"] for f in json.loads(text or "{}").get("data", [])}
+        except ValueError:
+            return
+        added = 0
+        for field in FIELDS:
+            if field["field"] in present:
+                continue
+            status, text = self._raw("POST", f"/fields/{COLLECTION}", field)
+            if status == 200:
+                added += 1
+            elif "already exists" not in text.lower():
+                log.warning("field %s could not be added (%s)", field["field"], status)
+        if added:
+            log.info("added %d field(s) to %s", added, COLLECTION)
 
     def ready_or_retry(self):
         """True once the collection is usable; re-checks at most every 5 minutes."""
@@ -145,6 +203,41 @@ class Cache:
             if self.ready:
                 log.info("successfully connected to d9 at %s", self.base)
             return self.ready
+
+    def purge(self, days=PURGE_DAYS):
+        """Drop cached rows older than `days`; never touches the setting row."""
+        if not self.ready:
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+        query = urllib.parse.urlencode(
+            {
+                "filter[_or][0][date_created][_lt]": cutoff,
+                "filter[_or][1][date_created][_null]": "true",
+                "filter[kind][_neq]": "setting",
+                "fields": "id",
+                "limit": -1,
+            }
+        )
+        try:
+            rows = self._call("GET", "?" + query).get("data") or []
+        except Exception as e:
+            log.warning("purge lookup failed: %s", e)
+            return 0
+
+        ids = [row["id"] for row in rows if row.get("id") is not None]
+        removed = 0
+        # This fork deletes by keys in the JSON body, not by query string.
+        for start in range(0, len(ids), 100):
+            chunk = ids[start : start + 100]
+            try:
+                self._call("DELETE", "", {"keys": chunk})
+                removed += len(chunk)
+            except Exception as e:
+                log.warning("purge delete failed: %s", e)
+                break
+        if removed:
+            log.info("purged %d cache rows older than %d days", removed, days)
+        return removed
 
     # -- cache ----------------------------------------------------------
 
@@ -195,11 +288,11 @@ class Cache:
         except Exception as e:
             log.warning("cache write failed: %s", e)
 
-    def fresh(self, hit):
+    def fresh(self, hit, ttl=None):
         if not hit:
             return False
         try:
             age = time.time() - float(hit["payload"].get("fetched_at") or 0)
         except (TypeError, ValueError):
             return False
-        return age < self.ttl
+        return age < (self.ttl if ttl is None else ttl)

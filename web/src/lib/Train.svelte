@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { train as fetchTrain } from './api.js';
+  import { isFollowing, toggleFollow } from './follow.js';
 
   let { no } = $props();
 
@@ -9,15 +10,24 @@
   let error = $state('');
   let seq = 0;
   let nowMs = $state(Date.now());
+  let followed = $state(false);
+  let shared = $state('');
 
   onMount(() => {
     const tick = setInterval(() => (nowMs = Date.now()), 30000);
-    return () => clearInterval(tick);
+    // Refresh while the tab is visible; the server enforces its own cooldown.
+    const refresh = setInterval(() => {
+      if (document.visibilityState === 'visible' && data) load(no, true);
+    }, 60000);
+    return () => {
+      clearInterval(tick);
+      clearInterval(refresh);
+    };
   });
 
   async function load(n, force = false) {
     const mine = ++seq;
-    loading = true;
+    if (!force) loading = true;
     error = '';
     try {
       const res = await fetchTrain(n, force);
@@ -33,6 +43,10 @@
 
   $effect(() => {
     load(no);
+  });
+
+  $effect(() => {
+    if (data) followed = isFollowing(data.train.no);
   });
 
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -122,7 +136,7 @@
     return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60 ? `${m % 60} min` : ''}`.trim() : `${m} min`;
   }
   function ago(ts) {
-    const mins = Math.round((Date.now() / 1000 - ts) / 60);
+    const mins = Math.round((nowMs / 1000 - ts) / 60);
     return mins < 1 ? 'just now' : `${mins} min ago`;
   }
   function times(stop, which) {
@@ -154,6 +168,25 @@
     const m = delta(stop);
     return m == null ? '' : m > 0 ? 'late' : m < 0 ? 'early' : 'zero';
   }
+  function toggle() {
+    if (!data) return;
+    followed = toggleFollow({ no: data.train.no, name: data.train.name });
+  }
+  async function share() {
+    const url = location.href;
+    const label = data ? `${data.train.no} ${data.train.name}` : 'patri';
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: label, url });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      shared = 'Link copied';
+      setTimeout(() => (shared = ''), 2000);
+    } catch {
+      shared = '';
+    }
+  }
 </script>
 
 <svelte:head>
@@ -172,10 +205,18 @@
     <p class="flash">{error} — showing the last result.</p>
   {/if}
 
-  <section class="banner {tone}">
+  <section class="banner {tone}" role="status" aria-live="polite">
     <strong>{headline}</strong>
     <p>{subline}</p>
   </section>
+
+  {#if data.status.exceptions?.length}
+    <section class="alerts" aria-label="Service alerts">
+      {#each data.status.exceptions as ex (ex.date + '-' + ex.type)}
+        <p><strong>{ex.type}</strong>{#if ex.date}<span> · {ex.date}</span>{/if}</p>
+      {/each}
+    </section>
+  {/if}
 
   <div class="head">
     <div>
@@ -187,7 +228,14 @@
       </p>
       <p class="runof">{runLabel}</p>
     </div>
-    <button class="ghost" onclick={() => load(no, true)} disabled={loading}>
+  </div>
+
+  <div class="actions">
+    <button class="ghost small" onclick={toggle} aria-pressed={followed}>
+      {followed ? '★ Following' : '☆ Follow'}
+    </button>
+    <button class="ghost small" onclick={share}>{shared || 'Share'}</button>
+    <button class="ghost small" onclick={() => load(no, true)} disabled={loading}>
       {loading ? '…' : 'Refresh'}
     </button>
   </div>
@@ -284,8 +332,16 @@
     cursor: pointer;
     white-space: nowrap;
   }
+  .ghost.small {
+    min-height: 34px;
+    height: 34px;
+    padding: 0 12px;
+    font-size: 0.8rem;
+    color: var(--soft);
+  }
   .ghost:hover:not(:disabled) {
     background: var(--raised);
+    color: var(--text);
   }
   .ghost:disabled {
     opacity: 0.5;
@@ -336,6 +392,29 @@
     color: var(--muted);
     font-weight: 500;
   }
+  .alerts {
+    margin: 0 0 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--line-strong);
+    border-left: 3px solid #ffffff;
+    border-radius: 12px;
+    background: #0d0d0d;
+  }
+  .alerts p {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--soft);
+  }
+  .alerts p + p {
+    margin-top: 4px;
+  }
+  .alerts strong {
+    color: #ffffff;
+    font-weight: 600;
+  }
+  .alerts span {
+    color: var(--muted);
+  }
   .head {
     display: flex;
     gap: 12px;
@@ -356,6 +435,12 @@
     margin: 2px 0 0;
     color: var(--dim);
     font-size: 0.76rem;
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 12px 0 0;
   }
   .note {
     margin: 14px 0 0;

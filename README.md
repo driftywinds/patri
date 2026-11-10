@@ -2,21 +2,79 @@
 
 Live Indian Railways running status: search a train by **name or number**, then see
 its whole route with scheduled times, actual/expected times, platform and delay —
-NTES first, cached in d9 (Directus 9).
+NTES first, cached in d9 (the Directus fork).
 
 Mobile-first, also fine on desktop. One Svelte page, one Python process.
 
 ## What it shows
 
-- Delay banner at the top ("Running 35 min late", last reported station, cache age).
+- Delay banner at the top ("Running 35 min late", last reported station, cache age),
+  announced politely to screen readers.
 - Every stop: scheduled arrival/departure, actual or expected time, delay chip,
-  platform, distance, and a `+1` day marker for overnight legs.
-- Trains that left yesterday and are still running are detected automatically.
-- Trains that do not run at all today fall back to the timetable, showing the full
-  route and the next date it actually runs (e.g. "Runs Tue, Sat · next run 14 Nov").
+  platform, distance, and a `day 2` marker for after-midnight stops.
+- A white marker on the train's current or next stop, derived from stop times in
+  IST because NTES drops the arrived/departed flags on individual stops.
+- Cancellation / diversion / reschedule alerts when NTES reports them.
+- **Followed trains** (saved in `localStorage`) with live delay chips on the home
+  screen.
+- Auto-refresh every 60 s while the tab is visible, and a **Share** button that
+  uses the native share sheet where available.
+- The last payload you opened keeps working offline via a small service worker.
 
-Expected times come from NTES itself (its `ETA` already folds in the running
-delay), so nothing is re-derived locally.
+Trains that left yesterday and are still running are found through NTES's own
+instance list, so journeys longer than two days are handled. Trains that do not
+run at all today fall back to the timetable and the next date they run.
+
+## Layout
+
+```
+server/app.py    HTTP server, API, static files, security, admin session
+server/rail.py   NTES client wrapper and normalisation
+server/store.py  cache over d9, collection bootstrap, purge
+web/             Svelte 5 UI (built to web/dist)
+tests/           unittest suite, no network needed
+```
+
+## Run
+
+```bash
+cp .env.example .env            # DIRECTUS_URL, DIRECTUS_TOKEN, ADMIN_TOKEN
+pip install -r requirements.txt # pinned and hashed
+
+cd web && pnpm install && pnpm build && cd ..
+
+python -m server.app            # -> http://127.0.0.1:8000
+```
+
+## Docker
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+The image builds the UI in a Node stage and runs one non-root Python process.
+It is read-only, drops all capabilities, and binds to `127.0.0.1:8000` — put
+Caddy/nginx in front for TLS.
+
+**`TRUSTED_PROXY=1` is set in compose** because the proxy is the only way in.
+It makes the server read the *rightmost* `X-Forwarded-For` hop for rate limiting.
+Never enable it when the port is exposed directly.
+
+`GET /api/health` needs neither d9 nor NTES, so it is the container healthcheck.
+`GET /api/ready` additionally reports d9 and NTES state.
+
+## Configuration
+
+| variable | default | meaning |
+|---|---|---|
+| `DIRECTUS_URL` | — | d9 base URL; must be `https` (http only for localhost) |
+| `DIRECTUS_TOKEN` | — | d9 token; CRUD on `patri_cache` is enough |
+| `ADMIN_TOKEN` | — | unlocks `/admin`; under 32 chars disables it |
+| `TRUSTED_PROXY` | `0` | trust the rightmost `X-Forwarded-For` hop |
+| `NTES_CONCURRENCY` | `4` | max simultaneous NTES calls |
+| `CACHE_TTL` | `900` | seconds a cached train payload is served |
+| `HOST` / `PORT` | `0.0.0.0` / `8000` | listen address |
 
 ## d9 setup
 
@@ -27,110 +85,78 @@ schema access for one boot). Nothing else is touched.
 
 | field | type | notes |
 |---|---|---|
-| `id` | integer, PK, auto | created by Directus |
-| `kind` | string | `live`, `search` or `setting` |
-| `cache_key` | string | train number, or `name:<query>` / `number:<query>` |
+| `id` | integer, PK, auto | created by d9 |
+| `kind` | string | `live`, `search`, `exc`, `miss`, `setting` |
+| `cache_key` | string | train number, normalised query, or `font` |
 | `train_no` | string, nullable | for filtering in the admin UI |
 | `run_date` | date, nullable | which run the cached page describes |
 | `payload` | json | the API response the UI gets |
 
-Plus the two Directus timestamps. Rows are keyed by `kind` + `cache_key`; the
-server upserts on `cache_key` and never writes anywhere else. A restricted
-token only needs **create/read/update/delete on `patri_cache`** — schema access
-is used once, on the first boot.
-
-What the server does on that first boot:
-
-```python
-POST /collections  {"collection": "patri_cache", "meta": {"icon": "database"}, "schema": {}}
-POST /fields/patri_cache  {"field": "kind",      "type": "string", "meta": {"interface": "input"}, "schema": {}}
-POST /fields/patri_cache  {"field": "cache_key", "type": "string", "meta": {"interface": "input"}, "schema": {}}
-POST /fields/patri_cache  {"field": "train_no",  "type": "string", "meta": {"interface": "input"}, "schema": {}}
-POST /fields/patri_cache  {"field": "run_date",  "type": "date",   "meta": {"interface": "datetime"}, "schema": {}}
-POST /fields/patri_cache  {"field": "payload",   "type": "json",   "meta": {"interface": "input-code"}, "schema": {}}
-```
-
-## Run
-
-```bash
-cp .env.example .env            # fill DIRECTUS_TOKEN
-pip install -r requirements.txt
-
-cd web && pnpm install && pnpm build && cd ..
-
-python -m server.app            # -> http://127.0.0.1:8000  (and your LAN IP)
-```
-
-`web/` is built to `web/dist`, which the Python server serves. For UI work,
-`cd web && pnpm dev` proxies `/api` to port 8000.
+Rows are purged after 7 days (the `setting` row is never touched), and a
+five-minute retry re-checks the schema if d9 was down at boot.
 
 ## Admin
 
-`/admin` switches the site typeface (Inter by default, IBM Plex Sans optional).
-The choice is stored as a `setting` row in `patri_cache` and injected into
-`<html data-font>` while the HTML is served, so every page and every device gets
-it with no flash and no extra request.
+`/admin` switches the site typeface (Inter by default, IBM Plex Sans optional),
+stored as a `setting` row and injected into `<html data-font>` while the HTML is
+served — no flash, no extra request.
 
-Writing the setting requires the `ADMIN_TOKEN` from `.env`, sent as an
-`X-Admin-Token` header. The page asks for it once and keeps it in
-`localStorage`. With no token set on the server, `/admin` can read but not save.
+The key is traded for a random session id kept server-side, in an `HttpOnly`,
+`SameSite=Strict` cookie (`__Host-` prefixed over HTTPS). Logout deletes the
+session, so it revokes immediately; restarting the server also ends every
+session. `/admin` returns 404 when no valid `ADMIN_TOKEN` is configured.
 
+## API
 
-## Look and feel
-
-Pitch black canvas, grey hairlines, white for anything that matters. No hue is
-used to carry meaning: a delay is white-on-black text plus a filled chip, "on
-time" is a quiet outline, so the page reads the same in any light.
-
-Type is Inter by default and switchable at `/admin` — see below. Both families
-load from Google Fonts; offline the UI falls back to the system sans. See
-`mockups/` for the two side by side.
-
-## How fresh it is
-
-Every page read uses a cached row younger than `CACHE_TTL` (default 900 s), so
-what you see is at most 15 minutes old and NTES is only hit when it expires or
-when you press **Refresh**. There is no background poller: with no saved trains
-or notifications there is nothing to warm, and it keeps the request count low.
-Add the poller when you add followed trains.
-
-## Deploy
-
-```bash
-cp .env.example .env    # DIRECTUS_URL, DIRECTUS_TOKEN, ADMIN_TOKEN
-docker compose up -d --build
+```
+GET  /api/train/<no>?refresh=1   one page: header, status, stops, alerts
+GET  /api/search?q=...           name or number
+GET  /api/settings               current font + whether you are signed in
+POST /api/settings               {"font":"inter|plex"}  (session required)
+POST /api/admin/login            {"token":"..."}        (rate limited)
+POST /api/admin/logout
+GET  /api/health                 liveness only
+GET  /api/ready                  d9 + NTES readiness
+GET  /api/metrics                plain-text counters
 ```
 
-The image builds the UI in a Node stage and runs a single non-root Python
-process. The container is read-only with no capabilities, and compose binds it
-to `127.0.0.1:8000` — put Caddy/nginx in front for TLS and change the bind to
-`8000:8000` only if it must be reachable directly.
+Upstream protection: forced refresh is allowed once per train per 60 s,
+failures are negatively cached for 3 minutes, identical concurrent misses share
+one NTES call, and NTES calls are capped globally. A stale payload is served
+rather than an error when NTES fails.
 
-`GET /api/health` needs neither d9 nor NTES, so it is safe as the healthcheck.
+## Tests
 
-## Security
+```bash
+python -m unittest discover -s tests -t . -v
+```
 
-- **The app's d9 token is not an admin token.** It belongs to a `patri app` role
-  with CRUD on `patri_cache` and nothing else: schema, users and every other
-  collection return 403. The admin token is only needed to change that role.
-- **The admin key never goes to the browser.** `/api/admin/login` trades it for
-  a signed, `HttpOnly`, `SameSite=Strict` session cookie; the key itself is never
-  stored client-side and the session expires after 12 h.
-- **Rate limits** — 120 API requests/minute per client (protects NTES from us),
-  5 failed logins per 5 minutes, both keyed on the real client IP when the peer
-  is a private address (our own proxy), never on a spoofable header from the
-  internet.
-- **CSP without third-party origins** — fonts are self-hosted in
-  `web/public/fonts`, so `font-src`/`style-src` stay `'self'` and there is no
-  Google Fonts request.
-- `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, HSTS when
-  served over HTTPS.
+No network: the NTES normaliser is table-driven, and the handler tests cover the
+malformed-`Content-Length`, NUL-path, cross-origin and spoofed-`X-Forwarded-For`
+cases found in review.
 
-## Notes
+## Security notes
 
-- NTES has no public API. This uses the reverse-engineered mobile API through
-  [`ntes-client`](https://pypi.org/project/ntes-client/) (MIT). It can break
-  without notice.
-- The Directus token lives in `.env`, which is gitignored. The browser never
-  sees it: the app only talks to this server.
-- Request rate is naturally low (~1-2 NTES calls per cold train, then cached).
+- The d9 token stays server-side and is sent to `https` URLs only, with
+  redirects refused, so it cannot be forwarded to another host.
+- Rate limits are per real client, evicted least-recently-used rather than wiped,
+  and IPv6 clients are keyed by `/64`.
+- Admin sessions are random ids in server state (not signed with the admin
+  password), and state-changing requests require a JSON `Content-Type` and a
+  same-origin `Origin`.
+- CSP keeps `style-src 'unsafe-inline'` because Svelte compiles per-component
+  style attributes; there are no third-party origins and fonts are self-hosted.
+- `requirements.txt` pins every version with hashes; the Docker bases are digest
+  pinned and CI audits both ecosystems.
+
+## Known gaps
+
+- No Web Push alerts (needs VAPID keys, a subscription table and a background
+  poller), no PNR lookup (captcha-based, personal data), no Hindi UI yet.
+- No date picker on the train page; the API always picks the nearest live run.
+- `http.server` is still the server, now with timeouts, a worker cap and a
+  catch-all; a WSGI/ASGI server is the next step if traffic grows.
+
+## License
+
+AGPL-3.0-only. See [LICENSE](LICENSE).
