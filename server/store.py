@@ -6,6 +6,7 @@ best-effort: a cache failure is logged and the request carries on.
 """
 import json
 import logging
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -14,6 +15,9 @@ import urllib.request
 log = logging.getLogger("patri.cache")
 
 COLLECTION = "patri_cache"
+
+# d9 usually boots slower than us; keep checking until the collection answers.
+RETRY_SECONDS = 300
 
 FIELDS = [
     {
@@ -45,6 +49,9 @@ class Cache:
         self.endpoint = f"{self.base}/items/{COLLECTION}"
         self.token = token
         self.ttl = ttl
+        self.ready = False
+        self._next_check = 0.0
+        self._lock = threading.Lock()
 
     # -- plumbing -------------------------------------------------------
 
@@ -119,10 +126,30 @@ class Cache:
         log.info("created %s with %d fields", COLLECTION, len(FIELDS))
         return True
 
+    def ready_or_retry(self):
+        """True once the collection is usable; re-checks at most every 5 minutes."""
+        if self.ready:
+            return True
+        with self._lock:
+            if self.ready:
+                return True
+            now = time.time()
+            if now < self._next_check:
+                return False
+            self._next_check = now + RETRY_SECONDS
+            try:
+                self.ready = self.ensure_schema()
+            except Exception as e:
+                log.warning("schema check failed: %s", e)
+                self.ready = False
+            return self.ready
+
     # -- cache ----------------------------------------------------------
 
     def get(self, kind, key):
         """Return {'id': int, 'payload': dict} or None."""
+        if not self.ready_or_retry():
+            return None
         query = urllib.parse.urlencode(
             {
                 "filter[kind][_eq]": kind,
@@ -149,6 +176,8 @@ class Cache:
         return {"id": rows[0].get("id"), "payload": payload}
 
     def put(self, kind, key, payload, train_no=None, run_date=None, row_id=None):
+        if not self.ready_or_retry():
+            return
         body = {
             "kind": kind,
             "cache_key": key,
