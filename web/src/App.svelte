@@ -3,6 +3,7 @@
   import Search from './lib/Search.svelte';
   import Train from './lib/Train.svelte';
   import Admin from './lib/Admin.svelte';
+  import Marquee from './lib/Marquee.svelte';
   import { search } from './lib/api.js';
 
   const admin = location.pathname.replace(/\/+$/, '') === '/admin';
@@ -78,7 +79,7 @@
             <a class="hit" href="#/t/{r.no}">
               <span class="hit-no">{r.no}</span>
               <span class="hit-main">
-                <span class="hit-name">{r.name}</span>
+                <span class="hit-name"><Marquee text={r.name} /></span>
                 <span class="hit-route">{r.source_name} → {r.dest_name}</span>
               </span>
               {#if r.type}<span class="badge">{r.type}</span>{/if}
@@ -183,10 +184,9 @@
     flex: 1;
   }
   .hit-name {
+    display: block;
     font-weight: 500;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    min-width: 0;
   }
   .hit-route {
     color: var(--muted);
