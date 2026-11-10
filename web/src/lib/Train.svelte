@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import { train as fetchTrain } from './api.js';
 
   let { no } = $props();
@@ -7,6 +8,12 @@
   let loading = $state(true);
   let error = $state('');
   let seq = 0;
+  let nowMs = $state(Date.now());
+
+  onMount(() => {
+    const tick = setInterval(() => (nowMs = Date.now()), 30000);
+    return () => clearInterval(tick);
+  });
 
   async function load(n, force = false) {
     const mine = ++seq;
@@ -63,7 +70,29 @@
     return bits.join(' · ');
   });
 
-  let nextIndex = $derived(data ? data.stops.findIndex((s) => !s.departed) : -1);
+  // NTES omits the arrived/departed flags for some stops, so position comes from
+  // time first (train times are always IST) and the flags only confirm it.
+  let rows = $derived.by(() => {
+    if (!data) return [];
+    const stops = data.stops;
+    const run = data.train.run_date;
+    const served = stops.map((s) => {
+      if (s.arrived || s.departed) return true;
+      const when = ist(run, s.dep.exp || s.arr.exp || s.dep.sch || s.arr.sch);
+      return when !== null && when <= nowMs;
+    });
+    const firstOpen = served.indexOf(false);
+    const prev = firstOpen > 0 ? stops[firstOpen - 1] : null;
+    // Sitting at a platform counts as the current stop, not the next one.
+    const atPlatform = prev && prev.arrived && !prev.departed && firstOpen !== -1;
+    const marker = firstOpen === -1 ? stops.length - 1 : atPlatform ? firstOpen - 1 : firstOpen;
+    return stops.map((s, i) => ({
+      ...s,
+      served: served[i],
+      done: i < marker,
+      marker: i === marker,
+    }));
+  });
 
   let runLabel = $derived.by(() => {
     if (!data) return '';
@@ -71,6 +100,12 @@
     return `${Number(d)} ${MON[Number(m) - 1]} ${y}`;
   });
 
+  function ist(runDate, slot) {
+    if (!slot) return null;
+    const [y, m, d] = runDate.split('-').map(Number);
+    const [hh, mm] = slot.t.split(':').map(Number);
+    return Date.UTC(y, m - 1, d, hh, mm) + slot.d * 86400000 - 330 * 60000;
+  }
   function title(s) {
     return String(s || '')
       .toLowerCase()
@@ -105,7 +140,7 @@
     const m = delta(stop);
     if (m == null) return '';
     // "on time" is only worth saying for stops the train already served.
-    if (m === 0 && !stop.arrived && !stop.departed) return '';
+    if (m === 0 && !stop.served) return '';
     return m === 0 ? 'on time' : m > 0 ? `+${m}m` : `${m}m`;
   }
   function chipClass(stop) {
@@ -155,15 +190,19 @@
   {/if}
 
   <ol class="stops">
-    {#each data.stops as s, i (s.seq)}
-      <li class="stop {i === nextIndex ? 'next' : ''} {s.departed ? 'passed' : ''}">
+    {#each rows as s, i (s.seq)}
+      <li
+        class="stop {s.marker ? (data.status.state === 'running' ? 'cur' : 'end') : ''} {s.done
+          ? 'passed'
+          : ''}"
+      >
         <span class="rail" aria-hidden="true"><span class="dot"></span></span>
         <div class="row">
           <div class="times">
             <span class="sch">{times(s, 'sch')}</span>
             {#if differs(s)}
               <span class="exp">
-                <span class="lbl">{s.departed ? 'act' : 'exp'}</span>
+                <span class="lbl">{s.served ? 'act' : 'exp'}</span>
                 {times(s, 'exp')}
               </span>
             {/if}
@@ -183,6 +222,24 @@
       </li>
     {/each}
   </ol>
+
+  <section class="legend">
+    <h2>Reading this page</h2>
+    <dl class="terms">
+      <dt>Sch</dt>
+      <dd>timetable time</dd>
+      <dt>Act</dt>
+      <dd>what the train actually did, as reported by NTES</dd>
+      <dt>Exp</dt>
+      <dd>forecast for a stop not reached yet — the running delay is already in it</dd>
+      <dt>+12m</dt>
+      <dd>lateness at that stop · filled chip = late, outlined = on time, −4m = early</dd>
+      <dt>day 2</dt>
+      <dd>the stop falls after midnight, on the second day of the run</dd>
+      <dt><span class="key-dot"></span></dt>
+      <dd>the white marker is the train’s current or next stop</dd>
+    </dl>
+  </section>
 {/if}
 
 <style>
@@ -344,9 +401,12 @@
     background: #6f6f6f;
     border-color: #6f6f6f;
   }
-  .stop.next .dot {
+  .stop.cur .dot,
+  .stop.end .dot {
     background: #ffffff;
     border-color: #ffffff;
+  }
+  .stop.cur .dot {
     box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.14);
   }
   .row {
@@ -435,6 +495,43 @@
     border-color: var(--line);
     color: var(--dim);
     font-weight: 500;
+  }
+  .legend {
+    margin: 26px 0 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .legend h2 {
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--dim);
+    margin: 0 0 12px;
+    font-weight: 600;
+  }
+  .terms {
+    display: grid;
+    grid-template-columns: 58px 1fr;
+    gap: 7px 14px;
+    margin: 0;
+  }
+  .terms dt {
+    color: var(--soft);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .terms dd {
+    margin: 0;
+  }
+  .key-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ffffff;
+    vertical-align: middle;
   }
   @media (max-width: 420px) {
     .row {
