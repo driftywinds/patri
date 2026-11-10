@@ -1,0 +1,160 @@
+name: Build and Push patri to GHCR
+
+on:
+  # Pushing any git tag (e.g. v0.3.1) builds and pushes "latest" + that tag.
+  push:
+    tags:
+      - '*'
+  # Manual run: you choose the tags yourself.
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: 'Comma-separated list of tags (e.g. "latest,v0.2.0")'
+        required: true
+        type: string
+        default: 'latest'
+
+env:
+  REPO_URL: 'https://github.com/driftywinds/patri'
+  IMAGE_NAME: 'driftywinds/patri'
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: build-push
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout repository
+        # v4 branch commit — pinned so a mutable tag cannot change the code.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: target-repo
+          persist-credentials: false
+
+      - name: Validate tags
+        env:
+          INPUT_TAGS: ${{ inputs.tags || format('latest,{0}', github.ref_name) }}
+        run: |
+          if [[ -z "${INPUT_TAGS// /}" ]]; then
+            echo "tags input must not be empty" >&2
+            exit 1
+          fi
+          IFS=',' read -ra TAG_ARRAY <<< "$INPUT_TAGS"
+          first_tag=""
+          version_tag=""
+          for tag in "${TAG_ARRAY[@]}"; do
+            tag="$(echo "$tag" | xargs)"
+            [[ -z "$tag" ]] && continue
+            if [[ ! "$tag" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+              echo "invalid tag: $tag" >&2
+              exit 1
+            fi
+            if [[ -z "$first_tag" ]]; then
+              first_tag="$tag"
+            fi
+            # The version shown in the console is the first tag that is not
+            # the floating "latest" (so "latest,v0.2.0" reports v0.2.0).
+            if [[ -z "$version_tag" && "$tag" != "latest" ]]; then
+              version_tag="$tag"
+            fi
+          done
+          if [[ -z "$first_tag" ]]; then
+            echo "tags input contained no usable tags" >&2
+            exit 1
+          fi
+          echo "IMAGE_VERSION=${version_tag:-$first_tag}" >> "$GITHUB_ENV"
+
+      - name: Build metadata
+        run: |
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - name: Record commit info
+        run: |
+          cd ./target-repo
+          echo "REPO_COMMIT=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          echo "REPO_SHORT_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Detect Dockerfile location
+        id: dockerfile
+        run: |
+          cd ./target-repo
+          if [[ -f "Dockerfile" ]]; then
+            DOCKERFILE_PATH="Dockerfile"
+          elif [[ -f "docker/Dockerfile" ]]; then
+            DOCKERFILE_PATH="docker/Dockerfile"
+          else
+            echo "Error: No Dockerfile found in root or docker/ directory"
+            exit 1
+          fi
+          echo "path=$DOCKERFILE_PATH" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        # v3 branch commit
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+
+      - name: Log in to GitHub Container Registry
+        # v3 branch commit
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate tags
+        id: meta
+        env:
+          INPUT_TAGS: ${{ inputs.tags || format('latest,{0}', github.ref_name) }}
+        run: |
+          IFS=',' read -ra TAG_ARRAY <<< "$INPUT_TAGS"
+          ALL_TAGS=""
+          for tag in "${TAG_ARRAY[@]}"; do
+            tag=$(echo "$tag" | xargs)
+            [[ -z "$tag" ]] && continue
+            if [[ -n "$ALL_TAGS" ]]; then
+              ALL_TAGS="$ALL_TAGS,"
+            fi
+            ALL_TAGS="${ALL_TAGS}ghcr.io/${IMAGE_NAME}:${tag}"
+          done
+          echo "tags=$ALL_TAGS" >> $GITHUB_OUTPUT
+          echo "Generated tags: $ALL_TAGS"
+
+      - name: Build and push Docker image
+        # v5 branch commit
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: ./target-repo
+          file: ./target-repo/${{ steps.dockerfile.outputs.path }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ env.IMAGE_VERSION }}
+          provenance: true
+          sbom: true
+          labels: |
+            org.opencontainers.image.title=patri
+            org.opencontainers.image.description=Built from ${{ env.REPO_URL }}
+            org.opencontainers.image.url=${{ env.REPO_URL }}
+            org.opencontainers.image.source=${{ env.REPO_URL }}
+            org.opencontainers.image.revision=${{ env.REPO_COMMIT }}
+            org.opencontainers.image.version=${{ env.IMAGE_VERSION }}
+            org.opencontainers.image.created=${{ env.BUILD_DATE }}
+            org.opencontainers.image.licenses=AGPL-3.0-only
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** $REPO_URL" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ env.REPO_SHORT_COMMIT }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dockerfile:** ${{ steps.dockerfile.outputs.path }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Built Tags:" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
