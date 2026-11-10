@@ -52,7 +52,10 @@
   <main class="wrap"><Admin /></main>
 {:else}
   <header class="bar">
-    <a class="brand" href="#/">patri</a>
+    <a class="brand" href="#/" aria-label="patri home">
+      <img src="/logo-transparent.svg" alt="" width="26" height="26" />
+      <span>patri</span>
+    </a>
     <Search onsubmit={runSearch} busy={busy} />
   </header>
 
@@ -121,11 +124,19 @@
     min-width: 0;
   }
   .brand {
+    display: flex;
+    align-items: center;
+    gap: 7px;
     font-weight: 700;
     font-size: 1.15rem;
     letter-spacing: -0.02em;
     padding: 0 2px;
     color: var(--text);
+  }
+  .brand img {
+    display: block;
+    width: 26px;
+    height: 26px;
   }
   .state,
   .count {
@@ -140,6 +151,8 @@
     margin: 0;
     padding: 0;
     display: grid;
+    /* implicit auto tracks refuse to shrink below nowrap text; pin them */
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
   .hit {
