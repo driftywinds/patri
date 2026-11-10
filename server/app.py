@@ -391,6 +391,8 @@ def main():
         raise SystemExit(f"{WEB} is missing - build the UI first: cd web && pnpm install && pnpm build")
 
     cache = Cache(base_url, token, int(os.environ.get("CACHE_TTL", "900")))
+    if not cache.ensure_schema():
+        log.warning("d9 will not cache until %s is available", "patri_cache")
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
 

@@ -20,7 +20,10 @@ delay), so nothing is re-derived locally.
 
 ## d9 setup
 
-The app owns exactly one collection, `patri_cache` (nothing else is touched):
+The app owns exactly one collection, `patri_cache`, and creates it with its
+fields on first boot when the token is allowed to manage schema. With a
+restricted token, create it once by hand in the d9 admin UI (or give the token
+schema access for one boot). Nothing else is touched.
 
 | field | type | notes |
 |---|---|---|
@@ -32,10 +35,11 @@ The app owns exactly one collection, `patri_cache` (nothing else is touched):
 | `payload` | json | the API response the UI gets |
 
 Plus the two Directus timestamps. Rows are keyed by `kind` + `cache_key`; the
-server upserts on `cache_key` and never writes anywhere else. The static token
-needs **create/read/update/delete on `patri_cache` only**.
+server upserts on `cache_key` and never writes anywhere else. A restricted
+token only needs **create/read/update/delete on `patri_cache`** — schema access
+is used once, on the first boot.
 
-To reproduce it through the API:
+What the server does on that first boot:
 
 ```python
 POST /collections  {"collection": "patri_cache", "meta": {"icon": "database"}, "schema": {}}
