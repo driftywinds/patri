@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+!.env.example
+.tmp
+.deps
+.venv
+build
+__pycache__
+*.pyc
+*.log
+web/node_modules
+web/dist
+mockups

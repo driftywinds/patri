@@ -1,0 +1,13 @@
+.env
+.deps/
+.venv/
+.tmp/
+build/
+__pycache__/
+*.pyc
+web/node_modules/
+web/dist/
+
+# agent tooling, not part of the app
+skills/
+AGENTS.md

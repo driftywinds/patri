@@ -1,0 +1,17 @@
+services:
+  patri:
+    build: .
+    image: patri:latest
+    restart: unless-stopped
+    env_file: .env
+    # loopback only: put Caddy/nginx in front for TLS, or change to "8000:8000"
+    ports:
+      - '127.0.0.1:8000:8000'
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    init: true
