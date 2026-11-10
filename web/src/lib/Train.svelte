@@ -12,14 +12,23 @@
   let nowMs = $state(Date.now());
   let followed = $state(false);
   let shared = $state('');
+  let offline = $state(false);
 
   onMount(() => {
+    offline = !navigator.onLine;
+    const goOffline = () => (offline = true);
+    const goOnline = () => (offline = false);
+    addEventListener('offline', goOffline);
+    addEventListener('online', goOnline);
+
     const tick = setInterval(() => (nowMs = Date.now()), 30000);
     // Refresh while the tab is visible; the server enforces its own cooldown.
     const refresh = setInterval(() => {
-      if (document.visibilityState === 'visible' && data) load(no, true);
+      if (document.visibilityState === 'visible' && data && navigator.onLine) load(no, true);
     }, 60000);
     return () => {
+      removeEventListener('offline', goOffline);
+      removeEventListener('online', goOnline);
       clearInterval(tick);
       clearInterval(refresh);
     };
@@ -201,6 +210,9 @@
     <button class="ghost" onclick={() => load(no, true)}>Try again</button>
   </div>
 {:else if data}
+  {#if !navigator.onLine || offline}
+    <p class="flash offline">Offline — showing the last saved update.</p>
+  {/if}
   {#if error}
     <p class="flash">{error} — showing the last result.</p>
   {/if}
