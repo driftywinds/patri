@@ -53,7 +53,7 @@
 {:else}
   <header class="bar">
     <a class="brand" href="#/" aria-label="patri home">
-      <img src="/logo-transparent.svg" alt="" width="26" height="26" />
+      <img src="/logo-trans.svg" alt="" width="26" height="26" />
       <span>patri</span>
     </a>
     <Search onsubmit={runSearch} busy={busy} />
