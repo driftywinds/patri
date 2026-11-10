@@ -123,7 +123,7 @@ class Cache:
             if status != 200:
                 log.warning("field %s failed (%s): %s", field["field"], status, text[:160])
                 return False
-        log.info("created %s with %d fields", COLLECTION, len(FIELDS))
+        log.info("created collection at d9 server %s", self.base)
         return True
 
     def ready_or_retry(self):
@@ -142,6 +142,8 @@ class Cache:
             except Exception as e:
                 log.warning("schema check failed: %s", e)
                 self.ready = False
+            if self.ready:
+                log.info("successfully connected to d9 at %s", self.base)
             return self.ready
 
     # -- cache ----------------------------------------------------------
