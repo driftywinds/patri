@@ -72,7 +72,7 @@ class Cache:
             return 0, str(e)
 
     def _call(self, method, path="", body=None):
-        status, text = self._raw(method, path, body)
+        status, text = self._raw(method, f"/items/{COLLECTION}{path}", body)
         if status not in (200, 204):
             raise RuntimeError(f"{method} {path} -> {status}: {text[:160]}")
         return json.loads(text or "{}")
