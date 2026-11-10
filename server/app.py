@@ -81,15 +81,13 @@ def set_font(value):
 # --- upstream ---------------------------------------------------------------
 
 
-def api_search(query, by):
+def api_search(query):
     query = (query or "").strip()
-    if by not in ("name", "number"):
-        by = "name"
-    key = f"{by}:{query.lower()}"
+    key = query.lower()
     hit = cache.get("search", key)
     if cache.fresh(hit):
         return hit["payload"]
-    data = rail.search(query, by)
+    data = rail.search(query)
     cache.put("search", key, data, row_id=(hit or {}).get("id"))
     return data
 
@@ -249,10 +247,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if url.path == "/api/search":
                 params = parse_qs(url.query)
-                data = api_search(
-                    (params.get("q") or [""])[0],
-                    (params.get("by") or ["name"])[0],
-                )
+                data = api_search((params.get("q") or [""])[0])
                 return self._json(200, data)
 
             match = re.fullmatch(r"/api/train/([0-9]{3,5})", url.path)

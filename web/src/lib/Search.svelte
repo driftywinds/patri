@@ -1,31 +1,24 @@
 <script>
   let { onsubmit, busy = false } = $props();
   let q = $state('');
-  let by = $state('name');
 
   function submit(event) {
     event.preventDefault();
     const value = q.trim();
-    if (value.length >= 2) onsubmit({ q: value, by });
+    if (value.length >= 2) onsubmit({ q: value });
   }
 </script>
 
 <form class="search" onsubmit={submit} role="search">
-  <div class="field">
-    <input
-      bind:value={q}
-      type="search"
-      placeholder="Train number or name"
-      aria-label="Train number or name"
-      autocomplete="off"
-      autocapitalize="characters"
-      enterkeyhint="search"
-    />
-    <select bind:value={by} aria-label="Search by">
-      <option value="name">Name</option>
-      <option value="number">Number</option>
-    </select>
-  </div>
+  <input
+    bind:value={q}
+    type="search"
+    placeholder="Train number or name"
+    aria-label="Train number or name"
+    autocomplete="off"
+    autocapitalize="characters"
+    enterkeyhint="search"
+  />
   <button type="submit" disabled={busy}>{busy ? 'Searching…' : 'Search'}</button>
 </form>
 
@@ -34,48 +27,27 @@
     display: grid;
     grid-template-columns: 1fr auto;
     gap: 8px;
-    align-items: stretch;
-  }
-  .field {
-    display: flex;
-    align-items: stretch;
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    overflow: hidden;
-  }
-  .field:focus-within {
-    border-color: #6f6f6f;
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
   }
   input {
-    flex: 1;
+    height: 44px;
     min-width: 0;
-    border: 0;
-    background: transparent;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: var(--card);
     color: var(--text);
     font: inherit;
     padding: 0 12px;
-    height: 44px;
   }
   input::placeholder {
     color: var(--dim);
   }
-  input:focus {
+  input:focus-visible {
     outline: none;
+    border-color: #6f6f6f;
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
   }
   input::-webkit-search-cancel-button {
     filter: invert(0.6);
-  }
-  select {
-    border: 0;
-    border-left: 1px solid var(--line);
-    background: transparent;
-    color: var(--muted);
-    font: inherit;
-    font-size: 0.88rem;
-    padding: 0 8px;
-    height: 44px;
   }
   button {
     height: 44px;

@@ -5,8 +5,7 @@ async function get(url) {
   return body;
 }
 
-export const search = (q, by) =>
-  get(`/api/search?q=${encodeURIComponent(q)}&by=${encodeURIComponent(by)}`);
+export const search = (q) => get(`/api/search?q=${encodeURIComponent(q)}`);
 
 export const train = (no, refresh = false) =>
   get(`/api/train/${encodeURIComponent(no)}${refresh ? '?refresh=1' : ''}`);

@@ -14,7 +14,7 @@
   let busy = $state(false);
   let error = $state('');
   let searched = $state(false);
-  let last = $state({ q: '', by: 'name' });
+  let last = $state({ q: '' });
 
   function route() {
     const m = location.hash.match(/^#\/t\/(\d{1,5})$/);
@@ -31,15 +31,15 @@
     return () => removeEventListener('hashchange', route);
   });
 
-  async function runSearch({ q, by }) {
+  async function runSearch({ q }) {
     // Leaving a train page is a navigation: the results live on the home view.
     if (location.hash !== '#/') location.hash = '#/';
-    last = { q, by };
+    last = { q };
     busy = true;
     error = '';
     results = [];
     try {
-      results = (await search(q, by)).results;
+      results = (await search(q)).results;
       searched = true;
     } catch (e) {
       error = e.message;

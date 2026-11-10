@@ -292,7 +292,7 @@ def clean_query(text):
     return re.sub(r"\s+", " ", re.sub(r"[^0-9A-Za-z .-]", " ", str(text or "").strip()))[:40].strip()
 
 
-def search(query, by="name"):
+def search(query):
     q = clean_query(query)
     if len(q) < 2:
         raise ValueError("enter at least 2 characters")
@@ -320,4 +320,4 @@ def search(query, by="name"):
     if q.isdigit():
         results.sort(key=lambda r: (r["no"] != q, r["name"]))
 
-    return {"query": q, "by": by, "results": results[:40], "fetched_at": time.time()}
+    return {"query": q, "results": results[:40], "fetched_at": time.time()}
