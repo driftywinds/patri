@@ -31,6 +31,8 @@
   });
 
   async function runSearch({ q, by }) {
+    // Leaving a train page is a navigation: the results live on the home view.
+    if (location.hash !== '#/') location.hash = '#/';
     last = { q, by };
     busy = true;
     error = '';
