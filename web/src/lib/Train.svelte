@@ -49,6 +49,7 @@
   let headline = $derived.by(() => {
     if (!st) return '';
     if (st.message) return st.message;
+    if (st.state === 'not_running') return st.runs ? `Runs ${st.runs}` : 'Not running today';
     if (st.state === 'finished') return `Reached ${title(data.train.dest_name || data.train.dest)}`;
     if (st.state === 'yet_to_start') return 'Yet to start';
     const d = st.delay ?? 0;
@@ -60,7 +61,12 @@
   let subline = $derived.by(() => {
     if (!st || !data) return '';
     const bits = [];
-    if (st.state === 'yet_to_start') {
+    if (st.state === 'not_running') {
+      if (st.next_run) {
+        const [y, m, d] = st.next_run.split('-');
+        bits.push(`next run ${Number(d)} ${MON[Number(m) - 1]} ${y}`);
+      }
+    } else if (st.state === 'yet_to_start') {
       const t = data.stops[0]?.dep?.sch;
       if (t) bits.push(`departs ${t.t}`);
     } else if (st.last_station) {
@@ -97,7 +103,8 @@
   let runLabel = $derived.by(() => {
     if (!data) return '';
     const [y, m, d] = data.train.run_date.split('-');
-    return `${Number(d)} ${MON[Number(m) - 1]} ${y}`;
+    const text = `${Number(d)} ${MON[Number(m) - 1]} ${y}`;
+    return data.status.state === 'not_running' ? `next run · ${text}` : `run of ${text}`;
   });
 
   function ist(runDate, slot) {
@@ -178,7 +185,7 @@
           · {data.train.distance} km
         {/if}
       </p>
-      <p class="runof">run of {runLabel}</p>
+      <p class="runof">{runLabel}</p>
     </div>
     <button class="ghost" onclick={() => load(no, true)} disabled={loading}>
       {loading ? '…' : 'Refresh'}

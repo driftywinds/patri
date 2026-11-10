@@ -12,6 +12,8 @@ Mobile-first, also fine on desktop. One Svelte page, one Python process.
 - Every stop: scheduled arrival/departure, actual or expected time, delay chip,
   platform, distance, and a `+1` day marker for overnight legs.
 - Trains that left yesterday and are still running are detected automatically.
+- Trains that do not run at all today fall back to the timetable, showing the full
+  route and the next date it actually runs (e.g. "Runs Tue, Sat · next run 14 Nov").
 
 Expected times come from NTES itself (its `ETA` already folds in the running
 delay), so nothing is re-derived locally.

@@ -66,9 +66,115 @@ def _flag(value):
 
 
 def _state(raw):
+    if raw is None:
+        return "unknown"
     if _flag(raw.get("isArrDSTN")):
         return "finished"
-    return _STATE.get(_int(raw.get("TRUNST")), "running")
+    run_state = _int(raw.get("TRUNST"))
+    if run_state is None:
+        return "unknown"
+    return _STATE.get(run_state, "unknown")
+
+
+_DAYS = {name: i for i, name in enumerate(("mon", "tue", "wed", "thu", "fri", "sat", "sun"))}
+
+
+def _next_run(days_of_run, after):
+    """'Tue,sat' -> the next date after `after` that the train actually runs."""
+    wanted = {
+        _DAYS[token.strip().lower()[:3]]
+        for token in str(days_of_run or "").split(",")
+        if token.strip().lower()[:3] in _DAYS
+    }
+    if not wanted:
+        return None
+    for step in range(1, 15):
+        day = after + timedelta(days=step)
+        if day.weekday() in wanted:
+            return day
+    return None
+
+
+def _pretty_days(days_of_run):
+    parts = [p.strip().title() for p in str(days_of_run or "").split(",") if p.strip()]
+    return ", ".join(parts)
+
+
+def _slot_from_clock(text, day):
+    t = str(text or "").strip()
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", t)
+    if not m:
+        return None
+    return {"t": f"{int(m.group(1)):02d}:{m.group(2)}", "d": max(0, (_int(day) or 1) - 1)}
+
+
+def _from_schedule(no, today):
+    """No run in the last/next day: fall back to the timetable and say when it next runs."""
+    try:
+        data = _client.schedule(no) or {}
+    except NTESError as e:
+        raise LookupError(str(e)) from e
+
+    raw_stops = data.get("stations") or []
+    if not raw_stops:
+        raise LookupError(f"NTES has no schedule for train {no}")
+
+    days = data.get("DaysOfRun") or ""
+    next_run = _next_run(days, today) or (today + timedelta(days=1))
+    stops = []
+    for item in raw_stops:
+        stops.append(
+            {
+                "seq": _int(item.get("Sr")) or 0,
+                "code": str(item.get("StationCode") or "").strip(),
+                "name": str(item.get("StationName") or "").strip(),
+                "dist": _int(item.get("Distance")),
+                "pf": None,
+                "arrived": False,
+                "departed": False,
+                "arr": {
+                    "sch": _slot_from_clock(item.get("STA"), item.get("Day")),
+                    "exp": None,
+                    "delay": None,
+                },
+                "dep": {
+                    "sch": _slot_from_clock(item.get("STD"), item.get("Day")),
+                    "exp": None,
+                    "delay": None,
+                },
+            }
+        )
+    stops.sort(key=lambda s: s["seq"])
+
+    return {
+        "train": {
+            "no": str(data.get("TrainNumber") or no).strip(),
+            "name": str(data.get("TrainName") or "").strip(),
+            "source": data.get("Source"),
+            "source_name": data.get("SourceName"),
+            "dest": data.get("Destination"),
+            "dest_name": data.get("DestinationName"),
+            "distance": _int(stops[-1]["dist"]) if stops else None,
+            "run_date": next_run.isoformat(),
+        },
+        "status": {
+            "state": "not_running",
+            "delay": None,
+            "last_station": None,
+            "last_code": None,
+            "last_update": None,
+            "next_station": None,
+            "next_code": None,
+            "note": str(data.get("AlertMsg") or "").strip() or None,
+            "message": None,
+            "arrived_dest": False,
+            "runs": _pretty_days(days),
+            "next_run": next_run.isoformat(),
+        },
+        "stops": stops,
+        "source": "ntes-schedule",
+        "fetched_at": time.time(),
+    }
 
 
 def _slot(moment, run_date):
@@ -143,10 +249,14 @@ def _normalise(no, raw, run_date):
 
 def _fetch(no, day):
     try:
-        return _client.live_status(no, day.strftime("%d-%b-%Y"))
+        raw = _client.live_status(no, day.strftime("%d-%b-%Y"))
     except NTESError as e:
         log.info("ntes %s %s: %s", no, day, e)
         return None
+    # A date the train does not run comes back with no stops, not an error.
+    if not raw or not raw.get("STNS"):
+        return None
+    return raw
 
 
 def page(train_no):
@@ -164,7 +274,7 @@ def page(train_no):
                 run_date = day
                 break
     if raw is None:
-        raise LookupError(f"NTES has no running data for train {no}")
+        return _from_schedule(no, today)
 
     # A train that left yesterday is still the one people are waiting for today.
     if run_date == today and _state(raw) == "yet_to_start":
