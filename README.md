@@ -92,8 +92,10 @@ schema access for one boot). Nothing else is touched.
 | `run_date` | date, nullable | which run the cached page describes |
 | `payload` | json | the API response the UI gets |
 
-Rows are purged after 7 days (the `setting` row is never touched), and a
-five-minute retry re-checks the schema if d9 was down at boot.
+Rows idle for 48 hours are purged (a row still being served keeps its timestamp
+fresh, the `setting` row is never touched), and a five-minute retry re-checks the
+schema if d9 was down at boot. A cached page itself is stale after 15 minutes, so
+old runs never linger as if they were current.
 
 ## Admin
 

@@ -334,9 +334,11 @@ def page(train_no):
                 return _normalise(no, prev, today - timedelta(days=1))
         return _normalise(no, raw, today)
 
-    # Dates NTES itself reported, nearest first.
-    for day in sorted({d for d, _ in instances}, key=lambda d: abs((d - today).days))[:3]:
-        if day == today:
+    # Dates NTES itself reported, nearest first. A run that finished two or more
+    # days ago is not this train's status, so fall through to the timetable.
+    floor = today - timedelta(days=1)
+    for day in sorted({d for d, _ in instances}, key=lambda d: abs((d - today).days))[:4]:
+        if day == today or day < floor:
             continue
         raw = _fetch(no, day)
         if raw is not None:

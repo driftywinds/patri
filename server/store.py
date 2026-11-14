@@ -20,7 +20,8 @@ COLLECTION = "patri_cache"
 
 # d9 usually boots slower than us; keep checking until the collection answers.
 RETRY_SECONDS = 300
-PURGE_DAYS = 7
+# A cached page is stale after 15 minutes, so a row idle for two days is noise.
+PURGE_HOURS = 48
 
 FIELDS = [
     {
@@ -204,15 +205,20 @@ class Cache:
                 log.info("successfully connected to d9 at %s", self.base)
             return self.ready
 
-    def purge(self, days=PURGE_DAYS):
-        """Drop cached rows older than `days`; never touches the setting row."""
+    def purge(self, hours=PURGE_HOURS):
+        """Drop rows idle for `hours`; the setting row is never touched.
+
+        date_updated is only set when a row is rewritten, so a row that is still
+        being read keeps its date_updated fresh and survives.
+        """
         if not self.ready:
             return 0
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
         query = urllib.parse.urlencode(
             {
-                "filter[_or][0][date_created][_lt]": cutoff,
-                "filter[_or][1][date_created][_null]": "true",
+                "filter[_or][0][date_updated][_lt]": cutoff,
+                "filter[_or][1][_and][0][date_updated][_null]": "true",
+                "filter[_or][1][_and][1][date_created][_lt]": cutoff,
                 "filter[kind][_neq]": "setting",
                 "fields": "id",
                 "limit": -1,
@@ -236,7 +242,7 @@ class Cache:
                 log.warning("purge delete failed: %s", e)
                 break
         if removed:
-            log.info("purged %d cache rows older than %d days", removed, days)
+            log.info("purged %d cache rows idle for %d h", removed, hours)
         return removed
 
     # -- cache ----------------------------------------------------------

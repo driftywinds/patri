@@ -1,6 +1,7 @@
 """Table-driven tests for the NTES normaliser (no network)."""
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from unittest import mock
 
 from server import rail
 
@@ -90,6 +91,40 @@ class SearchKeyTest(unittest.TestCase):
         self.assertEqual(rail.clean_query("  Rajdhani  "), "Rajdhani")
         self.assertEqual(rail.clean_query("rajdhani!"), "rajdhani")
         self.assertEqual(rail.clean_query("a" * 80), "a" * 40)
+
+
+class PageFallbackTest(unittest.TestCase):
+    """The screenshot bug: a run that finished days ago was shown as current."""
+
+    today = datetime.now(rail.IST).date()
+
+    def payload(self, state):
+        return {
+            "STNS": [
+                {"Sr": 1, "SC": "AAA", "SN": "A", "STA": "Source", "STD": "10:00 10-Nov", "DIST": 0}
+            ],
+            "TRUNST": state,
+        }
+
+    def test_running_instance_from_days_ago_is_used(self):
+        day = self.today - timedelta(days=3)
+        with (
+            mock.patch.object(rail, "_instances", return_value=[(day, 1)]),
+            mock.patch.object(rail, "_fetch", lambda no, d: self.payload(1) if d == day else None),
+            mock.patch.object(rail, "_from_schedule", return_value={"source": "schedule"}),
+        ):
+            out = rail.page("12345")
+        self.assertEqual(out["train"]["run_date"], day.isoformat())
+
+    def test_finished_instance_from_days_ago_falls_back_to_schedule(self):
+        day = self.today - timedelta(days=3)
+        with (
+            mock.patch.object(rail, "_instances", return_value=[(day, 2)]),
+            mock.patch.object(rail, "_fetch", lambda no, d: self.payload(2) if d == day else None),
+            mock.patch.object(rail, "_from_schedule", return_value={"source": "schedule"}),
+        ):
+            out = rail.page("12345")
+        self.assertEqual(out, {"source": "schedule"})
 
 
 if __name__ == "__main__":
